@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>家庭菜品管理端</title>
+    <!-- 引入 Tailwind CSS (CDN) 用于快速编写响应式样式 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 Vue 3 (CDN) 用于数据驱动和组件化开发 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- 引入 html2canvas (CDN) 用于将 DOM 元素转换为图片 -->
+    <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
+    
+    <style>
+        /* 隐藏滚动条但保留滚动功能，让移动端界面更干净 */
+        ::-webkit-scrollbar { display: none; }
+        body { -ms-overflow-style: none; scrollbar-width: none; background-color: #f3f4f6; }
+        
+        /* 简单的 Toast 动画 */
+        .toast-enter-active, .toast-leave-active { transition: opacity 0.5s ease, transform 0.5s ease; }
+        .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(-20px) translateX(-50%); }
+    </style>
+</head>
+<body class="text-gray-800 antialiased pb-20">
+    <div id="app" class="max-w-md mx-auto h-screen flex flex-col relative">
+        
+        <!-- 顶部标题栏 -->
+        <header class="bg-white shadow-sm p-4 sticky top-0 z-10 flex justify-between items-center">
+            <h1 class="text-xl font-bold text-gray-800">{{ tabTitles[currentTab] }}</h1>
+            <!-- 在菜品页显示批量生成菜单按钮 -->
+            <button v-if="currentTab === 'dishes'" @click="showMenuGenerator = true" class="text-sm bg-orange-100 text-orange-600 px-3 py-1 rounded-full font-medium">
+                生成菜谱
+            </button>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="flex-1 overflow-y-auto p-4 space-y-4">
+            
+            <!-- ==================== 1. 菜品管理 (Dish Module) ==================== -->
+            <div v-show="currentTab === 'dishes'" class="space-y-4">
+                <!-- 菜品列表 -->
+                <div v-for="dish in dishes" :key="dish.id" class="bg-white rounded-xl shadow-sm p-4 flex gap-4 items-center active:scale-[0.98] transition-transform">
+                    <!-- 多选框（用于生成菜谱） -->
+                    <input type="checkbox" v-model="selectedDishes" :value="dish.id" class="w-5 h-5 text-orange-500 rounded border-gray-300 focus:ring-orange-500">
+                    
+                    <!-- 菜品图片 -->
+                    <div class="w-20 h-20 rounded-lg bg-gray-100 flex-shrink-0 bg-cover bg-center" :style="{ backgroundImage: `url(${dish.image || 'https://via.placeholder.com/150?text=无图'})` }"></div>
+                    
+                    <!-- 菜品信息，点击编辑 -->
+                    <div class="flex-1 cursor-pointer" @click="editDish(dish)">
+                        <div class="flex items-center gap-2">
+                            <h3 class="font-bold text-lg">{{ dish.name }}</h3>
+                            <span class="text-sm">{{ getCategoryEmoji(dish.category) }}</span>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-1">主厨: {{ dish.chef || '未定' }}</p>
+                        <p class="text-xs text-gray-400 mt-1 truncate">{{ dish.ingredients.join(', ') || '暂无材料' }}</p>
+                    </div>
+                </div>
+
+                <!-- 悬浮添加按钮 -->
+                <button @click="openDishModal" class="fixed bottom-20 right-6 w-14 h-14 bg-orange-500 text-white rounded-full shadow-lg flex items-center justify-center text-3xl pb-1 z-20">
+                    +
+                </button>
+            </div>
+
+            <!-- ==================== 2. 材料管理 (Ingredient Module) ==================== -->
+            <div v-show="currentTab === 'ingredients'" class="space-y-3">
+                <div v-for="ing in ingredients" :key="ing.id" class="bg-white rounded-xl shadow-sm p-4 flex justify-between items-center">
+                    <div class="flex-1 cursor-pointer" @click="editIngredient(ing)">
+                        <h3 class="font-bold text-lg">{{ ing.name }}</h3>
+                        <div class="text-sm text-gray-500 flex gap-4 mt-1">
+                            <span>数量: {{ ing.quantity }}{{ ing.unit }}</span>
+                            <span :class="{'text-red-500': isExpired(ing.expiryDate)}">到期: {{ ing.expiryDate || '未设置' }}</span>
+                        </div>
+                    </div>
+                    <!-- 密封保鲜按钮 -->
+                    <button @click="sealIngredient(ing)" class="ml-4 px-3 py-1.5 bg-teal-50 text-teal-600 border border-teal-200 rounded-lg text-sm font-medium active:bg-teal-100">
+                        密封保鲜
+                    </button>
+                </div>
+
+                <button @click="openIngredientModal" class="fixed bottom-20 right-6 w-14 h-14 bg-teal-500 text-white rounded-full shadow-lg flex items-center justify-center text-3xl pb-1 z-20">
+                    +
+                </button>
+            </div>
+
+            <!-- ==================== 3. 计划管理 (Plan Module) ==================== -->
+            <div v-show="currentTab === 'plan'" class="space-y-4">
+                <div class="bg-white rounded-xl shadow-sm p-4">
+                    <!-- 日历控制头部 -->
+                    <div class="flex justify-between items-center mb-4">
+                        <button @click="changeMonth(-1)" class="p-2 text-gray-500">◀</button>
+                        <h2 class="font-bold text-lg">{{ currentYear }}年 {{ currentMonth + 1 }}月</h2>
+                        <button @click="changeMonth(1)" class="p-2 text-gray-500">▶</button>
+                    </div>
+                    
+                    <!-- 日历星期头 -->
+                    <div class="grid grid-cols-7 gap-1 text-center text-xs text-gray-400 mb-2">
+                        <div>日</div><div>一</div><div>二</div><div>三</div><div>四</div><div>五</div><div>六</div>
+                    </div>
+                    
+                    <!-- 日历格子 -->
+                    <div class="grid grid-cols-7 gap-1">
+                        <!-- 空白填充 -->
+                        <div v-for="empty in calendarPadDays" :key="'pad-'+empty" class="h-16 rounded-md bg-gray-50"></div>
+                        <!-- 实际天数 -->
+                        <div v-for="day in calendarDays" :key="day.dateStr" 
+                             @click="openDayPlan(day.dateStr)"
+                             class="h-16 rounded-md border flex flex-col items-center p-1 relative cursor-pointer active:scale-95 transition-transform"
+                             :class="day.isToday ? 'border-orange-500 bg-orange-50' : 'border-gray-100 bg-white'">
+                            <span class="text-xs font-medium" :class="day.isToday ? 'text-orange-600' : 'text-gray-700'">{{ day.dayNum }}</span>
+                            <!-- 数据联动：显示该日期计划菜品的 Emoji -->
+                            <div class="flex flex-wrap justify-center gap-0.5 mt-1 overflow-hidden">
+                                <span v-for="emoji in day.dishEmojis" :key="emoji" class="text-sm leading-none">{{ emoji }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- ==================== 底部固定导航栏 ==================== -->
+        <nav class="fixed bottom-0 w-full max-w-md bg-white border-t border-gray-200 flex justify-around pb-safe pt-2 pb-2 z-30">
+            <button @click="currentTab = 'dishes'" class="flex flex-col items-center flex-1" :class="currentTab === 'dishes' ? 'text-orange-500' : 'text-gray-400'">
+                <span class="text-2xl mb-1">🍲</span>
+                <span class="text-xs font-medium">菜品</span>
+            </button>
+            <button @click="currentTab = 'ingredients'" class="flex flex-col items-center flex-1" :class="currentTab === 'ingredients' ? 'text-teal-500' : 'text-gray-400'">
+                <span class="text-2xl mb-1">🥦</span>
+                <span class="text-xs font-medium">材料</span>
+            </button>
+            <button @click="currentTab = 'plan'" class="flex flex-col items-center flex-1" :class="currentTab === 'plan' ? 'text-indigo-500' : 'text-gray-400'">
+                <span class="text-2xl mb-1">📅</span>
+                <span class="text-xs font-medium">计划</span>
+            </button>
+        </nav>
+
+        <!-- ==================== 弹窗：菜品表单 ==================== -->
+        <div v-if="showDishModal" class="fixed inset-0 bg-black/50 z-40 flex items-end justify-center">
+            <div class="bg-white w-full max-w-md rounded-t-2xl p-6 h-[85vh] overflow-y-auto flex flex-col animation-slide-up">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-bold">{{ editingDishId ? '编辑菜品' : '新增菜品' }}</h2>
+                    <button @click="closeDishModal" class="text-gray-500 text-2xl leading-none">&times;</button>
+                </div>
+                
+                <div class="space-y-4 flex-1">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">菜品名称</label>
+                        <input v-model="dishForm.name" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">预览图 (点击更换)</label>
+                        <div class="relative w-full h-40 bg-gray-100 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center overflow-hidden">
+                            <img v-if="dishForm.image" :src="dishForm.image" class="w-full h-full object-cover">
+                            <span v-else class="text-gray-400">点击上传图片</span>
+                            <input type="file" accept="image/*" @change="handleImageUpload" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full">
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">分类</label>
+                            <select v-model="dishForm.category" class="w-full border border-gray-300 rounded-lg px-4 py-2 bg-white focus:ring-2 focus:ring-orange-500 outline-none">
+                                <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.icon }} {{ cat.name }}</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">主厨</label>
+                            <input v-model="dishForm.chef" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none">
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">所需材料 (逗号分隔)</label>
+                        <textarea v-model="dishForm.ingredientsRaw" @blur="processIngredients" rows="2" placeholder="例：豆角1斤, 土豆2个" class="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-orange-500 outline-none"></textarea>
+                        <p class="text-xs text-orange-500 mt-1">💡 失去焦点时，将自动提取材料名至「材料管理」</p>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">制作步骤</label>
+                        <div v-for="(step, index) in dishForm.steps" :key="index" class="flex gap-2 mb-2">
+                            <span class="w-6 h-6 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center text-sm flex-shrink-0 mt-1">{{ index + 1 }}</span>
+                            <textarea v-model="dishForm.steps[index]" rows="2" class="flex-1 border border-gray-300 rounded-lg px-3 py-1 focus:ring-2 focus:ring-orange-500 outline-none"></textarea>
+                            <button @click="removeStep(index)" class="text-red-500 font-bold px-2">✕</button>
+                        </div>
+                        <button @click="addStep" class="w-full py-2 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50">+ 添加步骤</button>
+                    </div>
+                </div>
+
+                <div class="mt-6">
+                    <button @click="saveDish" class="w-full bg-orange-500 text-white font-bold py-3 rounded-xl shadow-md active:bg-orange-600">保存菜品</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 弹窗：材料表单 ==================== -->
+        <div v-if="showIngredientModal" class="fixed inset-0 bg-black/50 z-40 flex items-end justify-center">
+            <div class="bg-white w-full max-w-md rounded-t-2xl p-6 h-[60vh] flex flex-col">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-xl font-bold">{{ editingIngredientId ? '编辑材料' : '新增材料' }}</h2>
+                    <button @click="closeIngredientModal" class="text-gray-500 text-2xl leading-none">&times;</button>
+                </div>
+                
+                <div class="space-y-4 flex-1">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">材料名称</label>
+                        <input v-model="ingredientForm.name" type="text" class="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none">
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">数量</label>
+                            <input v-model="ingredientForm.quantity" type="number" class="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">单位</label>
+                            <input v-model="ingredientForm.unit" type="text" placeholder="斤/个/克" class="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">到期日</label>
+                        <input v-model="ingredientForm.expiryDate" type="date" class="w-full border border-gray-300 rounded-lg px-4 py-2 outline-none bg-white">
+                    </div>
+                </div>
+
+                <div class="mt-6 flex gap-3">
+                    <button v-if="editingIngredientId" @click="deleteIngredient" class="bg-red-100 text-red-600 font-bold py-3 px-4 rounded-xl">删除</button>
+                    <button @click="saveIngredient" class="flex-1 bg-teal-500 text-white font-bold py-3 rounded-xl shadow-md active:bg-teal-600">保存材料</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== 弹窗：生成今日菜谱 ==================== -->
+        <div v-if="showMenuGenerator" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center pt-10 px-4">
+            <div class="w-full flex justify-between text-white mb-4">
+                <button @click="showMenuGenerator = false" class="text-lg">取消</button>
+                <input type="date" v-model="menuPlanDate" class="bg-transparent text-white border-b border-white/50 outline-none">
+            </div>
+
+            <!-- 需要被截图的卡片区域 id="menu-capture-area" -->
+            <div id="menu-capture-area" class="w-full max-w-sm bg-white rounded-2xl overflow-hidden shadow-2xl relative">
+                <!-- 装饰性背景 -->
+                <div class="h-32 bg-gradient-to-br from-orange-400 to-red-500 flex flex-col items-center justify-center text-white relative">
+                    <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #fff 2px, transparent 2px); background-size: 20px 20px;"></div>
+                    <h2 class="text-3xl font-bold tracking-widest relative z-10">今日菜谱</h2>
+                    <p class="text-sm opacity-90 mt-1 relative z-10">{{ menuPlanDate }}</p>
+                </div>
+                
+                <div class="p-6 space-y-4 bg-[#fdfbf7]">
+                    <div v-if="selectedDishesData.length === 0" class="text-center text-gray-400 py-10">
+                        请先在列表中勾选要生成的菜品
+                    </div>
+                    
+                    <div v-for="(dish, idx) in selectedDishesData" :key="dish.id" class="flex gap-4 items-center border-b border-gray-100 pb-3 last:border-0">
+                        <span class="text-2xl">{{ getCategoryEmoji(dish.category) }}</span>
+                        <div class="flex-1">
+                            <h3 class="font-bold text-gray-800 text-lg">{{ dish.name }}</h3>
+                            <p class="text-xs text-gray-500">{{ dish.chef }} 掌勺</p>
+                        </div>
+                    </div>
+                    
+                    <!-- 底部 Footer -->
+                    <div class="mt-6 pt-4 border-t border-dashed border-gray-300 text-center text-xs text-gray-400 flex justify-between items-center">
+                        <span>🥘 Family Recipe Manager</span>
+                        <span>Made with ❤️</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="mt-8 flex gap-4 w-full max-w-sm">
+                <button @click="confirmGeneratePlan" class="flex-1 bg-white text-orange-600 font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-transform">
+                    1. 写入计划表
+                </button>
+                <button @click="exportMenuImage" class="flex-1 bg-orange-500 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    2. 保存为图片
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== 弹窗：查看每日菜谱 ==================== -->
+        <div v-if="showDayPlanModal" class="fixed inset-0 bg-black/80 z-50 flex flex-col items-center pt-10 px-4">
+            <div class="w-full flex justify-between text-white mb-4">
+                <button @click="showDayPlanModal = false" class="text-lg">关闭</button>
+                <span class="text-lg font-medium">{{ viewingDate }}</span>
+            </div>
+
+            <!-- 需要被截图的卡片区域 id="day-plan-capture-area" -->
+            <div id="day-plan-capture-area" class="w-full max-w-sm bg-white rounded-2xl overflow-hidden shadow-2xl relative">
+                <!-- 装饰性背景 -->
+                <div class="h-32 bg-gradient-to-br from-indigo-400 to-blue-500 flex flex-col items-center justify-center text-white relative">
+                    <div class="absolute inset-0 opacity-20" style="background-image: radial-gradient(circle, #fff 2px, transparent 2px); background-size: 20px 20px;"></div>
+                    <h2 class="text-3xl font-bold tracking-widest relative z-10">每日菜谱</h2>
+                    <p class="text-sm opacity-90 mt-1 relative z-10">{{ viewingDate }}</p>
+                </div>
+                
+                <div class="p-6 space-y-4 bg-[#fdfbf7]">
+                    <div v-if="viewingDishes.length === 0" class="text-center text-gray-400 py-10">
+                        今日暂无菜谱安排，请前往菜品页生成
+                    </div>
+                    
+                    <div v-for="(dish, idx) in viewingDishes" :key="dish.id" class="flex gap-4 items-center border-b border-gray-100 pb-3 last:border-0">
+                        <span class="text-2xl">{{ getCategoryEmoji(dish.category) }}</span>
+                        <div class="flex-1">
+                            <h3 class="font-bold text-gray-800 text-lg">{{ dish.name }}</h3>
+                            <p class="text-xs text-gray-500">{{ dish.chef }} 掌勺</p>
+                        </div>
+                    </div>
+                    
+                    <!-- 底部 Footer -->
+                    <div class="mt-6 pt-4 border-t border-dashed border-gray-300 text-center text-xs text-gray-400 flex justify-between items-center">
+                        <span>🥘 Family Recipe Manager</span>
+                        <span>Made with ❤️</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="mt-8 flex gap-4 w-full max-w-sm" v-if="viewingDishes.length > 0">
+                <button @click="exportDayPlanImage" class="flex-1 bg-indigo-500 text-white font-bold py-3 rounded-xl shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    保存为图片
+                </button>
+            </div>
+        </div>
+
+        <!-- ==================== 全局 Toast 提示 ==================== -->
+        <transition name="toast">
+            <div v-if="toastMsg" class="fixed top-20 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-2xl z-[60] text-sm whitespace-nowrap">
+                {{ toastMsg }}
+            </div>
+        </transition>
+
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted } = Vue;
+
+        createApp({
+            setup() {
+                // ================== 基础状态 ==================
+                const currentTab = ref('dishes'); // dishes, ingredients, plan
+                const tabTitles = { dishes: '菜品管理', ingredients: '材料清单', plan: '饮食计划' };
+                
+                // Toast 提示逻辑
+                const toastMsg = ref('');
+                let toastTimer = null;
+                const showToast = (msg, duration = 2500) => {
+                    toastMsg.value = msg;
+                    if(toastTimer) clearTimeout(toastTimer);
+                    toastTimer = setTimeout(() => toastMsg.value = '', duration);
+                };
+
+                // 分类配置 (带颜色和Emoji)
+                const categories = [
+                    { id: 'meat', name: '肉禽海鲜', icon: '🥩' },
+                    { id: 'veg', name: '蔬菜菌菇', icon: '🥬' },
+                    { id: 'soup', name: '营养汤羹', icon: '🍲' },
+                    { id: 'staple', name: '主食小吃', icon: '🍚' },
+                    { id: 'dessert', name: '甜品烘焙', icon: '🍰' },
+                ];
+                const getCategoryEmoji = (id) => categories.find(c => c.id === id)?.icon || '🍽️';
+
+                // ================== 数据存储 (模拟数据库) ==================
+                // 实际项目中应存入 localStorage 或云端
+                const dishes = ref([
+                    { id: 'd1', name: '番茄炒蛋', image: '', category: 'veg', chef: '爸爸', ingredients: ['番茄2个', '鸡蛋3个'], steps: ['切番茄', '打蛋', '炒'] },
+                    { id: 'd2', name: '红烧肉', image: '', category: 'meat', chef: '妈妈', ingredients: ['五花肉1斤', '冰糖50克'], steps: ['焯水', '炒糖色', '炖煮'] }
+                ]);
+                
+                const ingredients = ref([
+                    { id: 'i1', name: '番茄', quantity: 5, unit: '个', expiryDate: '2024-12-30' },
+                    { id: 'i2', name: '五花肉', quantity: 2, unit: '斤', expiryDate: new Date().toISOString().split('T')[0] } // 模拟今天到期
+                ]);
+
+                // 计划表数据结构: [ { date: '2024-05-20', dishIds: ['d1', 'd2'] } ]
+                const plans = ref([]); 
+
+                // ================== 菜品管理逻辑 ==================
+                const showDishModal = ref(false);
+                const editingDishId = ref(null);
+                const dishForm = reactive({ name: '', image: '', category: 'veg', chef: '', ingredientsRaw: '', steps: [''] });
+                const selectedDishes = ref([]); // 勾选的菜品 ID 数组
+
+                const openDishModal = () => {
+                    editingDishId.value = null;
+                    Object.assign(dishForm, { name: '', image: '', category: 'veg', chef: '', ingredientsRaw: '', steps: [''] });
+                    showDishModal.value = true;
+                };
+
+                const editDish = (dish) => {
+                    editingDishId.value = dish.id;
+                    Object.assign(dishForm, { 
+                        ...dish, 
+                        ingredientsRaw: dish.ingredients.join(', '), // 数组转字符串展示在 textarea
+                        steps: [...dish.steps] 
+                    });
+                    showDishModal.value = true;
+                };
+
+                const closeDishModal = () => showDishModal.value = false;
+
+                const addStep = () => dishForm.steps.push('');
+                const removeStep = (idx) => dishForm.steps.splice(idx, 1);
+
+                // 图片上传转 Base64 预览
+                const handleImageUpload = (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (e) => dishForm.image = e.target.result;
+                        reader.readAsDataURL(file);
+                    }
+                };
+
+                // ★ 核心：智能材料提取逻辑
+                const processIngredients = () => {
+                    if (!dishForm.ingredientsRaw.trim()) return;
+                    
+                    // 将输入的字符串按逗号、空格或换行分割成数组
+                    const items = dishForm.ingredientsRaw.split(/[,，\s\n]+/).filter(Boolean);
+                    
+                    let extractedCount = 0;
+                    items.forEach(itemStr => {
+                        /**
+                         * 正则表达式原理解析：
+                         * /^       : 匹配字符串开头
+                         * ([^\d]+) : 捕获组1，匹配一个或多个「非数字」字符（这就是我们要提取的材料名称）
+                         * (\d.*)?  : 捕获组2(可选)，匹配一个数字及其后面的所有内容（数量和单位）
+                         * $/       : 匹配字符串结尾
+                         * * 举例："豆角1斤"
+                         * match[1] = "豆角"
+                         * match[2] = "1斤"
+                         */
+                        const match = itemStr.match(/^([^\d]+)(\d.*)?$/);
+                        
+                        if (match && match[1]) {
+                            const name = match[1].trim(); // 去除名称前后空格
+                            
+                            // 检查「材料管理表」中是否已经存在该名称
+                            const exists = ingredients.value.some(i => i.name === name);
+                            
+                            if (!exists && name) {
+                                // 如果不存在，自动推送到材料表
+                                ingredients.value.push({
+                                    id: 'i_' + Date.now() + Math.random().toString(36).substr(2, 5),
+                                    name: name,
+                                    quantity: '', // 默认留空
+                                    unit: '',     // 默认留空
+                                    expiryDate: ''// 默认留空
+                                });
+                                extractedCount++;
+                            }
+                        }
+                    });
+
+                    if (extractedCount > 0) {
+                        showToast(`已自动提取 ${extractedCount} 种新材料到清单`);
+                    }
+                };
+
+                const saveDish = () => {
+                    if (!dishForm.name) return showToast('菜品名称不能为空');
+                    
+                    const dishData = {
+                        id: editingDishId.value || 'd_' + Date.now(),
+                        name: dishForm.name,
+                        image: dishForm.image,
+                        category: dishForm.category,
+                        chef: dishForm.chef,
+                        // 将输入框的字符串转回数组存储
+                        ingredients: dishForm.ingredientsRaw.split(/[,，\n]+/).filter(Boolean).map(s=>s.trim()),
+                        steps: dishForm.steps.filter(s => s.trim() !== '')
+                    };
+
+                    if (editingDishId.value) {
+                        const idx = dishes.value.findIndex(d => d.id === editingDishId.value);
+                        dishes.value[idx] = dishData;
+                    } else {
+                        dishes.value.unshift(dishData);
+                    }
+                    closeDishModal();
+                    showToast('保存成功');
+                };
+
+                // ================== 材料管理逻辑 ==================
+                const showIngredientModal = ref(false);
+                const editingIngredientId = ref(null);
+                const ingredientForm = reactive({ name: '', quantity: '', unit: '', expiryDate: '' });
+
+                const openIngredientModal = () => {
+                    editingIngredientId.value = null;
+                    Object.assign(ingredientForm, { name: '', quantity: '', unit: '', expiryDate: '' });
+                    showIngredientModal.value = true;
+                };
+
+                const editIngredient = (ing) => {
+                    editingIngredientId.value = ing.id;
+                    Object.assign(ingredientForm, ing);
+                    showIngredientModal.value = true;
+                };
+                
+                const closeIngredientModal = () => showIngredientModal.value = false;
+
+                const saveIngredient = () => {
+                    if (!ingredientForm.name) return showToast('材料名不能为空');
+                    const data = { ...ingredientForm, id: editingIngredientId.value || 'i_' + Date.now() };
+                    if (editingIngredientId.value) {
+                        const idx = ingredients.value.findIndex(i => i.id === editingIngredientId.value);
+                        ingredients.value[idx] = data;
+                    } else {
+                        ingredients.value.unshift(data);
+                    }
+                    closeIngredientModal();
+                };
+
+                const deleteIngredient = () => {
+                    ingredients.value = ingredients.value.filter(i => i.id !== editingIngredientId.value);
+                    closeIngredientModal();
+                    showToast('已删除');
+                };
+
+                const isExpired = (dateStr) => {
+                    if(!dateStr) return false;
+                    return new Date(dateStr) < new Date(new Date().setHours(0,0,0,0));
+                };
+
+                // ★ 核心：密封保鲜功能（日期计算）
+                const sealIngredient = (ing) => {
+                    if (!ing.expiryDate) {
+                        return showToast('请先设置初始到期日再进行密封计算');
+                    }
+
+                    // 1. 获取今天的日期并将其时间清零（只比较日期部分）
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+
+                    // 2. 将字符串格式的到期日转换为 Date 对象，并清零时间
+                    const expiry = new Date(ing.expiryDate);
+                    expiry.setHours(0, 0, 0, 0);
+
+                    // 3. 计算时间差（毫秒），并转换为天数
+                    // 1天 = 24小时 * 60分钟 * 60秒 * 1000毫秒
+                    const diffTime = expiry.getTime() - today.getTime();
+                    const remainingDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                    // 如果已经过期或者就是今天到期，则无法延长
+                    if (remainingDays <= 0) {
+                        return showToast('材料已过期或将于今日到期，密封无效');
+                    }
+
+                    // 4. 计算新的剩余天数：当前剩余天数 * 3
+                    const newRemainingDays = remainingDays * 3;
+
+                    // 5. 根据今天的时间加上新的天数，得出最终的新日期对象
+                    const newExpiryDateObj = new Date(today.getTime() + (newRemainingDays * 24 * 60 * 60 * 1000));
+
+                    // 6. 将 Date 对象格式化为 YYYY-MM-DD 字符串，并更新回数据中
+                    const year = newExpiryDateObj.getFullYear();
+                    const month = String(newExpiryDateObj.getMonth() + 1).padStart(2, '0');
+                    const day = String(newExpiryDateObj.getDate()).padStart(2, '0');
+                    
+                    ing.expiryDate = `${year}-${month}-${day}`;
+                    
+                    showToast(`已密封！有效期延长至 ${ing.expiryDate}`);
+                };
+
+
+                // ================== 计划生成与日历逻辑 ==================
+                const showMenuGenerator = ref(false);
+                // 默认选择今天，格式 YYYY-MM-DD
+                const menuPlanDate = ref(new Date().toISOString().split('T')[0]); 
+                
+                // 计算属性：根据勾选的 ID 获取完整的菜品对象
+                const selectedDishesData = computed(() => {
+                    return selectedDishes.value.map(id => dishes.value.find(d => d.id === id)).filter(Boolean);
+                });
+
+                // 生成写入计划表
+                const confirmGeneratePlan = () => {
+                    if (selectedDishes.value.length === 0) return showToast('请至少勾选一个菜品');
+                    
+                    const targetDate = menuPlanDate.value;
+                    // 查找该日期是否已有计划
+                    let existingPlan = plans.value.find(p => p.date === targetDate);
+                    
+                    if (existingPlan) {
+                        // ★ 核心：防重校验
+                        // 检查新选的菜品中，是否已经存在于当天的计划中了
+                        const hasDuplicate = selectedDishes.value.some(id => existingPlan.dishIds.includes(id));
+                        if (hasDuplicate) {
+                            return showToast('拦截：该日期已存在相同的菜品计划！');
+                        }
+                        // 如果没有重复，追加进去
+                        existingPlan.dishIds.push(...selectedDishes.value);
+                    } else {
+                        // 如果当天没有计划，新建一条
+                        plans.value.push({
+                            date: targetDate,
+                            dishIds: [...selectedDishes.value]
+                        });
+                    }
+                    
+                    showToast('✅ 菜谱已成功写入计划表');
+                    // 清空勾选
+                    selectedDishes.value = [];
+                    // 自动跳转到计划 Tab 查看
+                    currentTab.value = 'plan';
+                    showMenuGenerator.value = false;
+                };
+
+                // ★ 核心：使用 html2canvas 生成图片保存
+                const exportMenuImage = async () => {
+                    if (selectedDishesData.value.length === 0) return showToast('卡片为空，无需生成');
+                    
+                    // 获取需要截图的 DOM 节点
+                    const captureEl = document.getElementById('menu-capture-area');
+                    
+                    // 显示提示，因为截图可能需要一点时间
+                    showToast('正在生成图片，请稍候...', 5000);
+                    
+                    try {
+                        // 调用 html2canvas 渲染节点
+                        const canvas = await html2canvas(captureEl, {
+                            scale: 2, // 提高清晰度（Retina屏标准）
+                            useCORS: true, // 允许加载跨域图片
+                            backgroundColor: '#ffffff' // 确保背景色为白色而不是透明
+                        });
+
+                        // 将 canvas 转换为 DataURL (Base64 字符串)
+                        const imageBase64 = canvas.toDataURL('image/png');
+
+                        // 创建一个隐藏的 a 标签触发下载机制
+                        const link = document.createElement('a');
+                        link.download = `今日菜谱_${menuPlanDate.value}.png`;
+                        link.href = imageBase64;
+                        link.click();
+                        
+                        showToast('🎉 图片已生成并触发下载');
+                    } catch (error) {
+                        console.error("生成图片失败:", error);
+                        showToast('生成图片失败，请重试');
+                    }
+                };
+
+                // 日历视图逻辑
+                const currentMonthDate = ref(new Date());
+                const currentYear = computed(() => currentMonthDate.value.getFullYear());
+                const currentMonth = computed(() => currentMonthDate.value.getMonth());
+
+                const changeMonth = (offset) => {
+                    const newDate = new Date(currentMonthDate.value);
+                    newDate.setMonth(newDate.getMonth() + offset);
+                    currentMonthDate.value = newDate;
+                };
+
+                // 计算日历开头需要补充几个空白格（以星期日开始）
+                const calendarPadDays = computed(() => {
+                    const firstDay = new Date(currentYear.value, currentMonth.value, 1).getDay();
+                    return firstDay;
+                });
+
+                // 获取本月具体天数和数据
+                const calendarDays = computed(() => {
+                    const daysInMonth = new Date(currentYear.value, currentMonth.value + 1, 0).getDate();
+                    const days = [];
+                    
+                    const todayStr = new Date().toISOString().split('T')[0];
+
+                    for (let i = 1; i <= daysInMonth; i++) {
+                        // 格式化当前格子的日期为 YYYY-MM-DD
+                        const m = String(currentMonth.value + 1).padStart(2, '0');
+                        const d = String(i).padStart(2, '0');
+                        const dateStr = `${currentYear.value}-${m}-${d}`;
+                        
+                        // 从 plans 数组中找到该日期的计划
+                        const planObj = plans.value.find(p => p.date === dateStr);
+                        let emojis = [];
+                        
+                        if (planObj) {
+                            // 遍历该日期的所有菜品ID，找到对应菜品，提取其分类的 Emoji
+                            emojis = planObj.dishIds.map(id => {
+                                const dish = dishes.value.find(d => d.id === id);
+                                return dish ? getCategoryEmoji(dish.category) : '';
+                            }).filter(Boolean); // 过滤掉空值
+                        }
+
+                        days.push({
+                            dayNum: i,
+                            dateStr: dateStr,
+                            isToday: dateStr === todayStr,
+                            dishEmojis: emojis // 传递给视图渲染
+                        });
+                    }
+                    return days;
+                });
+
+                // ★ 查看每日菜谱逻辑
+                const showDayPlanModal = ref(false);
+                const viewingDate = ref('');
+                
+                const viewingDishes = computed(() => {
+                    const plan = plans.value.find(p => p.date === viewingDate.value);
+                    if (!plan) return [];
+                    return plan.dishIds.map(id => dishes.value.find(d => d.id === id)).filter(Boolean);
+                });
+
+                const openDayPlan = (dateStr) => {
+                    viewingDate.value = dateStr;
+                    showDayPlanModal.value = true;
+                };
+
+                const exportDayPlanImage = async () => {
+                    if (viewingDishes.value.length === 0) return showToast('卡片为空，无需生成');
+                    
+                    const captureEl = document.getElementById('day-plan-capture-area');
+                    showToast('正在生成图片，请稍候...', 5000);
+                    
+                    try {
+                        const canvas = await html2canvas(captureEl, {
+                            scale: 2,
+                            useCORS: true,
+                            backgroundColor: '#ffffff'
+                        });
+
+                        const imageBase64 = canvas.toDataURL('image/png');
+                        const link = document.createElement('a');
+                        link.download = `每日菜谱_${viewingDate.value}.png`;
+                        link.href = imageBase64;
+                        link.click();
+                        
+                        showToast('🎉 图片已生成并触发下载');
+                    } catch (error) {
+                        console.error("生成图片失败:", error);
+                        showToast('生成图片失败，请重试');
+                    }
+                };
+
+                // 初始化添加一些模拟测试计划数据，让你一打开就能看到效果
+                onMounted(() => {
+                    const today = new Date().toISOString().split('T')[0];
+                    plans.value.push({
+                        date: today,
+                        dishIds: ['d1', 'd2']
+                    });
+                });
+
+                return {
+                    currentTab, tabTitles, toastMsg, categories, getCategoryEmoji,
+                    dishes, showDishModal, dishForm, editingDishId, openDishModal, closeDishModal, editDish, saveDish, addStep, removeStep, handleImageUpload, processIngredients, selectedDishes,
+                    ingredients, showIngredientModal, ingredientForm, editingIngredientId, openIngredientModal, closeIngredientModal, editIngredient, saveIngredient, deleteIngredient, sealIngredient, isExpired,
+                    showMenuGenerator, menuPlanDate, selectedDishesData, confirmGeneratePlan, exportMenuImage,
+                    currentYear, currentMonth, changeMonth, calendarPadDays, calendarDays,
+                    showDayPlanModal, viewingDate, viewingDishes, openDayPlan, exportDayPlanImage
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
